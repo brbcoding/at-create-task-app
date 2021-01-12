@@ -96,11 +96,11 @@ const SettingsComponent = ({ projectsTable, tasksTable, templatesTable }) => {
           </FormField>
         </>
       )}
+      <Heading size="xsmall">Template Table Setup</Heading>
       <FormField label="Task Template Table">
         <TablePickerSynced globalConfigKey="templateTableId" />
       </FormField>
       {/* can we get the id of the linked table from table.fields? */}
-      <Heading size="xsmall">Template Table Setup</Heading>
       {templatesTable && (
         <>
           <FormField label="Template field to use as task name">
@@ -169,6 +169,15 @@ function AirTasks() {
   const templatesTable = base.getTableByIdIfExists(templateTableId)
   const tasksTable = base.getTableByIdIfExists(tasksTableId)
 
+  console.log(
+    templateTableId,
+    templateTypeFieldId,
+    templateStepNameFieldId,
+    templateStepOrderFieldId,
+    templateDurationFieldId,
+    templateDependencyFieldId
+  )
+
   useSettingsButton(() => {
     setIsShowingSettings(!isShowingSettings)
   })
@@ -181,34 +190,38 @@ function AirTasks() {
     cursor.selectedRecordIds.length ? cursor.selectedRecordIds[0] : ""
   )
 
-  const taskRecords = useRecords(tasksTable).filter(
-    (taskRecord) =>
-      record && taskRecord.getCellValue(tasksProjectFieldId)[0].id === record.id
-  )
+  const tasks = useRecords(tasksTable)
+
+  const taskRecords = !tasks.length
+    ? []
+    : tasks.filter((taskRecord) => {
+        const project = taskRecord.getCellValue(tasksProjectFieldId)
+        return record && project ? project[0].id === record.id : null
+      })
 
   const projectType = record ? record.getCellValue(projectTypesFieldId) : null
 
-  const templateRecords = useRecords(templatesTable).filter(
-    (templateRecord) => {
-      const templateProjectType = templateRecord.getCellValue(
-        templateTypeFieldId
-      )
-      if (
-        projectType &&
-        projectType.length &&
-        templateProjectType &&
-        templateProjectType.length
-      ) {
-        return projectType[0].id === templateProjectType[0].id
-      }
+  const tempRecords = useRecords(templatesTable)
+  const templateRecords = (tempRecords || []).filter((templateRecord) => {
+    const templateProjectType = templateTypeFieldId
+      ? templateRecord.getCellValue(templateTypeFieldId)
+      : null
+
+    if (
+      projectType &&
+      projectType.length &&
+      templateProjectType &&
+      templateProjectType.length
+    ) {
+      return projectType[0].id === templateProjectType[0].id
     }
-  )
+  })
 
   const templateDependencies = templateRecords
     ? templateRecords.map((templateRecord) => {
-        const dependencies = templateRecord.getCellValue(
-          templateDependencyFieldId
-        )
+        const dependencies = templateDependencyFieldId
+          ? templateRecord.getCellValue(templateDependencyFieldId)
+          : null
 
         return {
           id: templateRecord.id,
