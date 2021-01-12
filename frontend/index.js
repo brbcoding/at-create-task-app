@@ -88,6 +88,12 @@ const SettingsComponent = ({ projectsTable, tasksTable, templatesTable }) => {
               table={tasksTable}
             />
           </FormField>
+          <FormField label="Tasks driver field">
+            <FieldPickerSynced
+              globalConfigKey="tasksDriverFieldId"
+              table={tasksTable}
+            />
+          </FormField>
           <FormField label="Tasks <-> Project Linking Field">
             <FieldPickerSynced
               globalConfigKey="tasksProjectFieldId"
@@ -127,6 +133,12 @@ const SettingsComponent = ({ projectsTable, tasksTable, templatesTable }) => {
               table={templatesTable}
             />
           </FormField>
+          <FormField label="Template driver field id">
+            <FieldPickerSynced
+              globalConfigKey="templateDriverFieldId"
+              table={templatesTable}
+            />
+          </FormField>
           <FormField label="Templates <-> Template Types Linking Field">
             <FieldPickerSynced
               globalConfigKey="templateTypeFieldId"
@@ -157,6 +169,7 @@ function AirTasks() {
   const templateDependencyFieldId = globalConfig.get(
     "templateDependencyFieldId"
   )
+  const templateDriverFieldId = globalConfig.get("templateDriverFieldId")
 
   const tasksProjectFieldId = globalConfig.get("tasksProjectFieldId")
   const tasksNameFieldId = globalConfig.get("tasksNameFieldId")
@@ -164,6 +177,7 @@ function AirTasks() {
   const tasksDueDateFieldId = globalConfig.get("tasksDueDateFieldId")
   const tasksDurationFieldId = globalConfig.get("tasksDurationFieldId")
   const tasksDependencyFieldId = globalConfig.get("tasksDependencyFieldId")
+  const tasksDriverFieldId = globalConfig.get("tasksDriverFieldId")
 
   const projectsTable = base.getTableByIdIfExists(projectsTableId)
   const templatesTable = base.getTableByIdIfExists(templateTableId)
@@ -238,14 +252,22 @@ function AirTasks() {
 
   const onCreateTasks = async () => {
     // use template records to create tasks
-    const newTaskRecords = templateRecords.map((t) => ({
-      fields: {
-        [tasksNameFieldId]: t.getCellValue(templateStepNameFieldId),
-        [tasksProjectFieldId]: [{ id: record.id }],
-        [tasksOrderFieldId]: t.getCellValue(templateStepOrderFieldId),
-        [tasksDurationFieldId]: t.getCellValue(templateDurationFieldId),
-      },
-    }))
+    const newTaskRecords = templateRecords.map((t) => {
+      const templateDriver = t.getCellValue(templateDriverFieldId)
+
+      return {
+        fields: {
+          [tasksNameFieldId]: t.getCellValue(templateStepNameFieldId),
+          [tasksProjectFieldId]: [{ id: record.id }],
+          [tasksOrderFieldId]: t.getCellValue(templateStepOrderFieldId),
+          [tasksDurationFieldId]: t.getCellValue(templateDurationFieldId),
+          [tasksDriverFieldId]:
+            templateDriver && templateDriver.length
+              ? [{ id: templateDriver[0].id }]
+              : null,
+        },
+      }
+    })
 
     // TODO: make this work with more than 50 steps (batch requests)
     const newRecords = await tasksTable.createRecordsAsync(newTaskRecords)
