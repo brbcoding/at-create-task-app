@@ -3,6 +3,7 @@ import {
   Button,
   FieldPickerSynced,
   Heading,
+  Input,
   Link,
   Text,
   TablePickerSynced,
@@ -20,18 +21,22 @@ import {
 } from "@airtable/blocks/ui"
 import { cursor } from "@airtable/blocks"
 import React, { useState } from "react"
+import { DateTime } from "luxon"
 
+// TODO: add the ability to see what tasks will be created before creating them
+// TODO: confirm delete before deleting tasks
+// TODO: due date logic
 const SettingsComponent = ({ projectsTable, tasksTable, templatesTable }) => {
   return (
     <Box padding={4}>
-      <Heading>Settings</Heading>
+      <Heading marginLeft={2}>Settings</Heading>
       <Heading size="xsmall">Projects Table Setup</Heading>
       <FormField label="Projects / Deliverables Table">
         <TablePickerSynced globalConfigKey="projectsTableId" />
       </FormField>
       <FormField label="Projects <-> Tasks Linking Field">
         <FieldPickerSynced
-          globalConfigKey="projectTasksField"
+          globalConfigKey="projectTasksFieldId"
           table={projectsTable}
         />
       </FormField>
@@ -94,6 +99,12 @@ const SettingsComponent = ({ projectsTable, tasksTable, templatesTable }) => {
               table={tasksTable}
             />
           </FormField>
+          <FormField label="Tasks status field">
+            <FieldPickerSynced
+              globalConfigKey="tasksStatusFieldId"
+              table={tasksTable}
+            />
+          </FormField>
           <FormField label="Tasks <-> Project Linking Field">
             <FieldPickerSynced
               globalConfigKey="tasksProjectFieldId"
@@ -153,11 +164,13 @@ const SettingsComponent = ({ projectsTable, tasksTable, templatesTable }) => {
 
 function AirTasks() {
   const [isShowingSettings, setIsShowingSettings] = useState(false)
+  const [dueDate, setDueDate] = useState("")
   const globalConfig = useGlobalConfig()
   const base = useBase()
   const projectsTableId = globalConfig.get("projectsTableId")
   const projectDueDateFieldId = globalConfig.get("projectDueDateFieldId")
   const projectTypesFieldId = globalConfig.get("projectTypesFieldId")
+  const projectTasksFieldId = globalConfig.get("projectTasksFieldId")
 
   const tasksTableId = globalConfig.get("tasksTableId")
 
@@ -178,19 +191,11 @@ function AirTasks() {
   const tasksDurationFieldId = globalConfig.get("tasksDurationFieldId")
   const tasksDependencyFieldId = globalConfig.get("tasksDependencyFieldId")
   const tasksDriverFieldId = globalConfig.get("tasksDriverFieldId")
+  const tasksStatusFieldId = globalConfig.get("tasksStatusFieldId")
 
   const projectsTable = base.getTableByIdIfExists(projectsTableId)
   const templatesTable = base.getTableByIdIfExists(templateTableId)
   const tasksTable = base.getTableByIdIfExists(tasksTableId)
-
-  console.log(
-    templateTableId,
-    templateTypeFieldId,
-    templateStepNameFieldId,
-    templateStepOrderFieldId,
-    templateDurationFieldId,
-    templateDependencyFieldId
-  )
 
   useSettingsButton(() => {
     setIsShowingSettings(!isShowingSettings)
@@ -205,7 +210,6 @@ function AirTasks() {
   )
 
   const tasks = useRecords(tasksTable)
-
   const taskRecords = !tasks.length
     ? []
     : tasks.filter((taskRecord) => {
@@ -215,8 +219,8 @@ function AirTasks() {
 
   const projectType = record ? record.getCellValue(projectTypesFieldId) : null
 
-  const tempRecords = useRecords(templatesTable)
-  const templateRecords = (tempRecords || []).filter((templateRecord) => {
+  const templatesRecords = useRecords(templatesTable)
+  const templateRecords = (templatesRecords || []).filter((templateRecord) => {
     const templateProjectType = templateTypeFieldId
       ? templateRecord.getCellValue(templateTypeFieldId)
       : null
@@ -289,7 +293,63 @@ function AirTasks() {
       })
       .filter((r) => r !== undefined)
 
-    const dependencyUpdates = await tasksTable.updateRecordsAsync(recordUpdates)
+    await tasksTable.updateRecordsAsync(recordUpdates)
+    // get the project deadline
+    // if no project deadline specified, don't set due dates
+    // if project deadline is specified, add due dates, starting from the last one
+    // augment original fields item so we don't have to refetch the task items to get their orde
+    const projectDueDate = record.getCellValue(projectDueDateFieldId)
+    let taskDueDate = projectDueDate
+    const taskDateUpdates = newTaskRecords
+      .map((newTaskRecord, idx) => {
+        return { ...newTaskRecord, id: newRecords[idx] }
+      })
+      .sort((a, b) =>
+        a.fields[tasksOrderFieldId] > b.fields[tasksOrderFieldId] ? -1 : 1
+      )
+      .map((newTaskRecord, idx, reversedTaskRecords) => {
+        // THIS IS CONFUSING
+        // BUT
+        // should work
+        // instead of returnning the currentTaskRecord, get the previous one
+        // and use the total duration of the current (duration + dependencies total duration) to set the due date
+        // but that means we won't update the final task record, so we need to add it back afterwards?
+        // may be cleaner w/ reduce or something
+        const previousTask = reversedTaskRecords[idx + 1]
+
+        if (!previousTask) {
+          return {
+            id: reversedTaskRecords[0].id,
+            fields: {
+              [tasksDueDateFieldId]: projectDueDate,
+            },
+          }
+        } else {
+          taskDueDate = DateTime.fromISO(taskDueDate)
+            .minus({ days: previousTask.fields[tasksDurationFieldId] })
+            .toISO()
+
+          return {
+            id: previousTask.id,
+            fields: {
+              [tasksDueDateFieldId]: taskDueDate,
+            },
+          }
+        }
+      })
+
+    await tasksTable.updateRecordsAsync(taskDateUpdates)
+  }
+
+  const onDeleteTasks = async () => {
+    // delete all tasks
+    // get all tasks from linked field
+    const existingTasks = record.getCellValue(projectTasksFieldId)
+    await tasksTable.deleteRecordsAsync(existingTasks)
+  }
+
+  const onSetDueDate = async (e) => {
+    setDueDate(e.target.value)
   }
 
   const onLinkToProjectsTable = (e) => {
@@ -324,25 +384,69 @@ function AirTasks() {
     )
   }
 
+  const recordCardFields = [
+    tasksNameFieldId,
+    tasksDueDateFieldId,
+    tasksDriverFieldId,
+    tasksDependencyFieldId,
+    tasksStatusFieldId,
+  ].map((fieldId) => tasksTable.getFieldByIdIfExists(fieldId))
+
   return (
-    <Box padding={2} width="100%">
+    <Box
+      padding={2}
+      width="100%"
+      display="flex"
+      flexDirection="column"
+      marginY={2}
+    >
       <Heading>✨ Create Tasks from Template</Heading>
       {cursor.selectedRecordIds.length ? (
         <Box>
-          <RecordCard record={record} />
+          <RecordCardList records={[record]} height={100} />
           {taskRecords.length ? (
             <Box marginTop={2}>
-              <Heading size="small">
-                Existing Tasks [{taskRecords.length}]
-              </Heading>
-              {<RecordCardList records={taskRecords} height={300} />}
+              <Box
+                display="flex"
+                justifyContent="space-between"
+                alignContent="center"
+                marginBottom={2}
+              >
+                <Heading size="small" marginLeft={2}>
+                  Existing Tasks [{taskRecords.length}]
+                </Heading>
+                {taskRecords.length && (
+                  <Button onClick={onDeleteTasks} variant="danger">
+                    Delete Existing Tasks
+                  </Button>
+                )}
+              </Box>
+              {
+                <RecordCardList
+                  fields={recordCardFields}
+                  records={taskRecords}
+                  height={300}
+                />
+              }
             </Box>
           ) : (
             <></>
           )}
-          <Button onClick={onCreateTasks} marginTop={2}>
-            {taskRecords.length ? "Create additional tasks" : "Create tasks"}
-          </Button>
+          <Box
+            display="flex"
+            marginTop={2}
+            marginX={2}
+            padding={2}
+            border="default"
+            borderRadius={2}
+          >
+            <Button onClick={onCreateTasks} marginRight={2}>
+              {taskRecords.length
+                ? `Create ${templateRecords.length} additional tasks`
+                : `Create ${templateRecords.length} tasks`}
+            </Button>
+            <Input type="date" onChange={onSetDueDate} value={dueDate} />
+          </Box>
         </Box>
       ) : (
         "Select project to create tasks"
