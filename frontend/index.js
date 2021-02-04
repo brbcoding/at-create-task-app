@@ -7,8 +7,9 @@ import {
   Link,
   Text,
   TablePickerSynced,
-  RecordCard,
   RecordCardList,
+  Select,
+  SwitchSynced,
   initializeBlock,
   useBase,
   useGlobalConfig,
@@ -20,13 +21,19 @@ import {
   FormField,
 } from "@airtable/blocks/ui"
 import { cursor } from "@airtable/blocks"
-import React, { useState } from "react"
-import { DateTime } from "luxon"
+import React, { useEffect, useState } from "react"
+import CreateTasksComponent from "./CreateTasksComponent"
 
 // TODO: add the ability to see what tasks will be created before creating them
 // TODO: confirm delete before deleting tasks
 // TODO: due date logic
-const SettingsComponent = ({ projectsTable, tasksTable, templatesTable }) => {
+const SettingsComponent = ({
+  projectsTable,
+  tasksTable,
+  templatesTable,
+  requestsEnabled,
+  requestsTable,
+}) => {
   return (
     <Box padding={4}>
       <Heading marginLeft={2}>Settings</Heading>
@@ -55,6 +62,21 @@ const SettingsComponent = ({ projectsTable, tasksTable, templatesTable }) => {
               table={projectsTable}
             />
           </FormField>
+          <FormField label="Projects Name Field">
+            <FieldPickerSynced
+              globalConfigKey="projectNameFieldId"
+              table={projectsTable}
+            />
+          </FormField>
+
+          {requestsEnabled && (
+            <FormField label="Projects <-> Requests Linking Field">
+              <FieldPickerSynced
+                globalConfigKey="projectRequestsFieldId"
+                table={projectsTable}
+              />
+            </FormField>
+          )}
         </>
       )}
       <Heading size="xsmall">Tasks Table Setup</Heading>
@@ -138,13 +160,13 @@ const SettingsComponent = ({ projectsTable, tasksTable, templatesTable }) => {
               table={templatesTable}
             />
           </FormField>
-          <FormField label="Template dependency field id">
+          <FormField label="Template dependency field">
             <FieldPickerSynced
               globalConfigKey="templateDependencyFieldId"
               table={templatesTable}
             />
           </FormField>
-          <FormField label="Template driver field id">
+          <FormField label="Template driver field">
             <FieldPickerSynced
               globalConfigKey="templateDriverFieldId"
               table={templatesTable}
@@ -158,31 +180,59 @@ const SettingsComponent = ({ projectsTable, tasksTable, templatesTable }) => {
           </FormField>
         </>
       )}
+      <Box display="flex" flexDirection="column">
+        <Heading size="xsmall">Requests Table Setup</Heading>
+        <SwitchSynced
+          label="Enable Requests Table?"
+          globalConfigKey="requestsEnabled"
+          backgroundColor="transparent"
+          padding="0"
+          marginY="0"
+        />
+        {requestsEnabled && (
+          <>
+            <FormField label="Requests Table">
+              <TablePickerSynced globalConfigKey="requestsTableId" />
+            </FormField>
+            <FormField label="Project Type Table">
+              <TablePickerSynced globalConfigKey="projectTypesTableId" />
+            </FormField>
+            <FormField label="Request Name Field">
+              <FieldPickerSynced
+                globalConfigKey="requestNameFieldId"
+                table={requestsTable}
+              />
+            </FormField>
+            <FormField label="Request Due Date Field">
+              <FieldPickerSynced
+                globalConfigKey="requestDueDateFieldId"
+                table={requestsTable}
+              />
+            </FormField>
+          </>
+        )}
+      </Box>
     </Box>
   )
 }
 
 function AirTasks() {
   const [isShowingSettings, setIsShowingSettings] = useState(false)
-  const [dueDate, setDueDate] = useState("")
+  const [newProjectType, setNewProjectType] = useState("")
+  const [newProjectName, setNewProjectName] = useState("")
   const globalConfig = useGlobalConfig()
   const base = useBase()
   const projectsTableId = globalConfig.get("projectsTableId")
   const projectDueDateFieldId = globalConfig.get("projectDueDateFieldId")
   const projectTypesFieldId = globalConfig.get("projectTypesFieldId")
+  const projectTypesTableId = globalConfig.get("projectTypesTableId")
+  const projectRequestsFieldId = globalConfig.get("projectRequestsFieldId")
+  const projectNameFieldId = globalConfig.get("projectNameFieldId")
   const projectTasksFieldId = globalConfig.get("projectTasksFieldId")
 
   const tasksTableId = globalConfig.get("tasksTableId")
 
   const templateTableId = globalConfig.get("templateTableId")
-  const templateTypeFieldId = globalConfig.get("templateTypeFieldId")
-  const templateStepNameFieldId = globalConfig.get("templateStepNameFieldId")
-  const templateStepOrderFieldId = globalConfig.get("templateStepOrderFieldId")
-  const templateDurationFieldId = globalConfig.get("templateDurationFieldId")
-  const templateDependencyFieldId = globalConfig.get(
-    "templateDependencyFieldId"
-  )
-  const templateDriverFieldId = globalConfig.get("templateDriverFieldId")
 
   const tasksProjectFieldId = globalConfig.get("tasksProjectFieldId")
   const tasksNameFieldId = globalConfig.get("tasksNameFieldId")
@@ -193,9 +243,19 @@ function AirTasks() {
   const tasksDriverFieldId = globalConfig.get("tasksDriverFieldId")
   const tasksStatusFieldId = globalConfig.get("tasksStatusFieldId")
 
+  const requestsEnabled = globalConfig.get("requestsEnabled")
+  const requestsTableId = globalConfig.get("requestsTableId")
+  const requestDueDateFieldId = globalConfig.get("requestDueDateFieldId")
+
   const projectsTable = base.getTableByIdIfExists(projectsTableId)
   const templatesTable = base.getTableByIdIfExists(templateTableId)
   const tasksTable = base.getTableByIdIfExists(tasksTableId)
+  const requestsTable =
+    requestsEnabled && base.getTableByIdIfExists(requestsTableId)
+
+  const projectTypesTable = base.getTableByIdIfExists(projectTypesTableId)
+  const projectsTableSelected = cursor.activeTableId === projectsTableId
+  const requestsTableSelected = cursor.activeTableId === requestsTableId
 
   useSettingsButton(() => {
     setIsShowingSettings(!isShowingSettings)
@@ -204,157 +264,108 @@ function AirTasks() {
   useLoadable(cursor)
   useWatchable(cursor, ["selectedRecordIds", "activeTableId"])
 
-  const record = useRecordById(
-    projectsTable,
+  const requestsRecord = useRecordById(
+    requestsTable,
     cursor.selectedRecordIds.length ? cursor.selectedRecordIds[0] : ""
   )
 
-  const tasks = useRecords(tasksTable)
-  const taskRecords = !tasks.length
-    ? []
-    : tasks.filter((taskRecord) => {
-        const project = taskRecord.getCellValue(tasksProjectFieldId)
-        return record && project ? project[0].id === record.id : null
-      })
+  const projectTypesRecords = useRecords(projectTypesTable)
 
-  const projectType = record ? record.getCellValue(projectTypesFieldId) : null
+  const [dueDate, setDueDate] = useState(
+    requestsRecord ? requestsRecord.getCellValue(requestDueDateFieldId) : ""
+  )
 
-  const templatesRecords = useRecords(templatesTable)
-  const templateRecords = (templatesRecords || []).filter((templateRecord) => {
-    const templateProjectType = templateTypeFieldId
-      ? templateRecord.getCellValue(templateTypeFieldId)
-      : null
+  const [selectedProject, setSelectedProject] = useState(
+    projectsTableSelected && cursor.selectedRecordIds.length
+      ? cursor.selectedRecordIds[0]
+      : ""
+  )
 
-    if (
-      projectType &&
-      projectType.length &&
-      templateProjectType &&
-      templateProjectType.length
-    ) {
-      return projectType[0].id === templateProjectType[0].id
+  const [selectedRequest, setSelectedRequest] = useState(
+    requestsTableSelected && cursor.selectedRecordIds.length
+      ? cursor.selectedRecordIds[0]
+      : ""
+  )
+
+  useWatchable(cursor, ["activeTableId"], () => {
+    setSelectedProject("")
+    setSelectedRequest("")
+  })
+
+  useWatchable(cursor, ["selectedRecordIds"], () => {
+    if (projectsTableSelected && cursor.selectedRecordIds.length) {
+      setSelectedProject(cursor.selectedRecordIds[0])
+    }
+
+    if (requestsTableSelected && cursor.selectedRecordIds.length) {
+      setSelectedProject("")
+      setSelectedRequest(cursor.selectedRecordIds[0])
     }
   })
 
-  const templateDependencies = templateRecords
-    ? templateRecords.map((templateRecord) => {
-        const dependencies = templateDependencyFieldId
-          ? templateRecord.getCellValue(templateDependencyFieldId)
-          : null
+  useEffect(() => {
+    if (requestsRecord) {
+      setDueDate(requestsRecord.getCellValue(requestDueDateFieldId))
+    }
+  }, [selectedRequest])
 
-        return {
-          id: templateRecord.id,
-          dependencies: dependencies
-            ? dependencies.map((d) => {
-                return templateRecords.findIndex(
-                  (templateRecord) => templateRecord.id === d.id
-                )
-              })
-            : [],
-        }
-      })
-    : []
+  const requiredSettings = [
+    tasksProjectFieldId,
+    tasksNameFieldId,
+    tasksOrderFieldId,
+    tasksDueDateFieldId,
+    tasksDurationFieldId,
+    tasksDependencyFieldId,
+    tasksDriverFieldId,
+    tasksStatusFieldId,
+  ]
 
-  const onCreateTasks = async () => {
-    // use template records to create tasks
-    const newTaskRecords = templateRecords.map((t) => {
-      const templateDriver = t.getCellValue(templateDriverFieldId)
-
-      return {
-        fields: {
-          [tasksNameFieldId]: t.getCellValue(templateStepNameFieldId),
-          [tasksProjectFieldId]: [{ id: record.id }],
-          [tasksOrderFieldId]: t.getCellValue(templateStepOrderFieldId),
-          [tasksDurationFieldId]: t.getCellValue(templateDurationFieldId),
-          [tasksDriverFieldId]:
-            templateDriver && templateDriver.length
-              ? [{ id: templateDriver[0].id }]
-              : null,
-        },
-      }
-    })
-
-    // TODO: make this work with more than 50 steps (batch requests)
-    const newRecords = await tasksTable.createRecordsAsync(newTaskRecords)
-    const recordUpdates = newRecords
-      .map((recordId, idx) => {
-        const deps = templateDependencies[idx].dependencies
-        if (!deps.length) return
-
-        return {
-          id: recordId,
-          fields: {
-            [tasksDependencyFieldId]: templateDependencies[
-              idx
-            ].dependencies.map((dependencyIndex) => ({
-              id: newRecords[dependencyIndex],
-            })),
-          },
-        }
-      })
-      .filter((r) => r !== undefined)
-
-    await tasksTable.updateRecordsAsync(recordUpdates)
-    // get the project deadline
-    // if no project deadline specified, don't set due dates
-    // if project deadline is specified, add due dates, starting from the last one
-    // augment original fields item so we don't have to refetch the task items to get their orde
-    const projectDueDate = record.getCellValue(projectDueDateFieldId)
-    let taskDueDate = projectDueDate
-    const taskDateUpdates = newTaskRecords
-      .map((newTaskRecord, idx) => {
-        return { ...newTaskRecord, id: newRecords[idx] }
-      })
-      .sort((a, b) =>
-        a.fields[tasksOrderFieldId] > b.fields[tasksOrderFieldId] ? -1 : 1
-      )
-      .map((newTaskRecord, idx, reversedTaskRecords) => {
-        // THIS IS CONFUSING
-        // BUT
-        // should work
-        // instead of returnning the currentTaskRecord, get the previous one
-        // and use the total duration of the current (duration + dependencies total duration) to set the due date
-        // but that means we won't update the final task record, so we need to add it back afterwards?
-        // may be cleaner w/ reduce or something
-        const previousTask = reversedTaskRecords[idx + 1]
-
-        if (!previousTask) {
-          return {
-            id: reversedTaskRecords[0].id,
-            fields: {
-              [tasksDueDateFieldId]: projectDueDate,
-            },
-          }
-        } else {
-          taskDueDate = DateTime.fromISO(taskDueDate)
-            .minus({ days: previousTask.fields[tasksDurationFieldId] })
-            .toISO()
-
-          return {
-            id: previousTask.id,
-            fields: {
-              [tasksDueDateFieldId]: taskDueDate,
-            },
-          }
-        }
-      })
-
-    await tasksTable.updateRecordsAsync(taskDateUpdates)
-  }
-
-  const onDeleteTasks = async () => {
-    // delete all tasks
-    // get all tasks from linked field
-    const existingTasks = record.getCellValue(projectTasksFieldId)
-    await tasksTable.deleteRecordsAsync(existingTasks)
-  }
+  if (requiredSettings.indexOf(undefined) > -1)
+    return (
+      <SettingsComponent
+        projectsTable={projectsTable}
+        templatesTable={templatesTable}
+        tasksTable={tasksTable}
+        requestsEnabled={requestsEnabled}
+        requestsTable={requestsTable}
+      />
+    )
 
   const onSetDueDate = async (e) => {
     setDueDate(e.target.value)
   }
 
+  const onSetProjectType = async (type) => {
+    setNewProjectType(type)
+  }
+
+  const onSetProjectName = async (e) => {
+    setNewProjectName(e.target.value)
+  }
+
   const onLinkToProjectsTable = (e) => {
     e.preventDefault()
     cursor.setActiveTable(projectsTable)
+  }
+
+  const onLinkToRequestsTable = (e) => {
+    e.preventDefault()
+    cursor.setActiveTable(requestsTable)
+  }
+
+  const onCreateProject = async () => {
+    const project = {
+      [projectNameFieldId]: newProjectName,
+      [projectRequestsFieldId]: [{ id: requestsRecord.id }],
+      [projectDueDateFieldId]: dueDate,
+      [projectTypesFieldId]: [{ id: newProjectType }],
+    }
+
+    const newProjectId = await projectsTable.createRecordAsync(project)
+    setSelectedProject(newProjectId)
+    setNewProjectName("")
+    setNewProjectType("")
+    setDueDate("")
   }
 
   if (isShowingSettings || !projectsTableId)
@@ -363,13 +374,18 @@ function AirTasks() {
         projectsTable={projectsTable}
         templatesTable={templatesTable}
         tasksTable={tasksTable}
+        requestsEnabled={requestsEnabled}
+        requestsTable={requestsTable}
       />
     )
 
-  if (cursor.activeTableId !== projectsTableId) {
+  if (
+    cursor.activeTableId !== projectsTableId &&
+    cursor.activeTableId !== requestsTableId
+  ) {
     return (
-      <Box padding={2}>
-        <Text>
+      <Box padding={2} display="flex">
+        <Text as="span">
           Select a record from the{" "}
           <Link
             href="/"
@@ -377,20 +393,33 @@ function AirTasks() {
             onClick={onLinkToProjectsTable}
           >
             {projectsTable.name}
-          </Link>{" "}
-          table to create tasks.
+          </Link>
+          {requestsEnabled ? (
+            <>
+              <Text as="span"> or the </Text>
+              <Link
+                href="/"
+                style={{ cursor: "pointer" }}
+                onClick={onLinkToRequestsTable}
+              >
+                {requestsTable.name}
+              </Link>{" "}
+              <Text as="span"> table to create tasks.</Text>
+            </>
+          ) : (
+            "."
+          )}
         </Text>
       </Box>
     )
   }
 
-  const recordCardFields = [
-    tasksNameFieldId,
-    tasksDueDateFieldId,
-    tasksDriverFieldId,
-    tasksDependencyFieldId,
-    tasksStatusFieldId,
-  ].map((fieldId) => tasksTable.getFieldByIdIfExists(fieldId))
+  const projectTypesOptions = projectTypesRecords.map((type) => {
+    return {
+      value: type.id,
+      label: type.name,
+    }
+  })
 
   return (
     <Box
@@ -400,56 +429,51 @@ function AirTasks() {
       flexDirection="column"
       marginY={2}
     >
-      <Heading>✨ Create Tasks from Template</Heading>
-      {cursor.selectedRecordIds.length ? (
-        <Box>
-          <RecordCardList records={[record]} height={100} />
-          {taskRecords.length ? (
-            <Box marginTop={2}>
-              <Box
-                display="flex"
-                justifyContent="space-between"
-                alignContent="center"
-                marginBottom={2}
-              >
-                <Heading size="small" marginLeft={2}>
-                  Existing Tasks [{taskRecords.length}]
-                </Heading>
-                {taskRecords.length && (
-                  <Button onClick={onDeleteTasks} variant="danger">
-                    Delete Existing Tasks
-                  </Button>
-                )}
+      {projectsTableSelected ? (
+        <CreateTasksComponent projectsRecordId={selectedProject} />
+      ) : (
+        <>
+          <Heading>✨ Create {projectsTable.name} </Heading>
+          {cursor.selectedRecordIds.length ? (
+            <Box>
+              <RecordCardList records={[requestsRecord]} height={100} />
+              <Box padding={2}>
+                <FormField label={`Name`}>
+                  <Input
+                    value={newProjectName}
+                    onChange={onSetProjectName}
+                  ></Input>
+                </FormField>
+                <FormField
+                  label={`Type - note: this should be listed in your ${projectTypesTable.name} table`}
+                >
+                  <Select
+                    options={projectTypesOptions}
+                    value={newProjectType}
+                    onChange={onSetProjectType}
+                  />
+                </FormField>
+                <FormField label={`Due date`}>
+                  <Input type="date" onChange={onSetDueDate} value={dueDate} />
+                </FormField>
+                <Button
+                  onClick={onCreateProject}
+                  variant="primary"
+                  disabled={newProjectName === "" || newProjectType === ""}
+                >
+                  Create new {`${projectsTable.name}`}
+                </Button>
               </Box>
-              {
-                <RecordCardList
-                  fields={recordCardFields}
-                  records={taskRecords}
-                  height={300}
-                />
-              }
             </Box>
+          ) : (
+            `Select a request to create a linked ${projectsTable.name} record.`
+          )}
+          {cursor.selectedRecordIds.length && selectedProject ? (
+            <CreateTasksComponent projectsRecordId={selectedProject} />
           ) : (
             <></>
           )}
-          <Box
-            display="flex"
-            marginTop={2}
-            marginX={2}
-            padding={2}
-            border="default"
-            borderRadius={2}
-          >
-            <Button onClick={onCreateTasks} marginRight={2}>
-              {taskRecords.length
-                ? `Create ${templateRecords.length} additional tasks`
-                : `Create ${templateRecords.length} tasks`}
-            </Button>
-            <Input type="date" onChange={onSetDueDate} value={dueDate} />
-          </Box>
-        </Box>
-      ) : (
-        "Select project to create tasks"
+        </>
       )}
     </Box>
   )
